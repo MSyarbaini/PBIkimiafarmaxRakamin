@@ -1,0 +1,46 @@
+WITH transaction_cleaned AS (
+    SELECT DISTINCT
+        ft.transaction_id, ft.branch_id, ft.product_id, ft.date AS transaction_date,  
+        COALESCE(ft.customer_name, 'Anonymous') AS customer_name, 
+        ft.price AS actual_price, COALESCE(ft.discount_percentage, 0) AS discount_percentage,
+        inv.inventory_id, COALESCE(inv.opname_stock, 0) AS stock_before_transaction,
+        
+        -- Perhitungan utama
+        (ft.price * (1 - COALESCE(ft.discount_percentage, 0) / 100)) AS nett_sales,
+        (ft.price * (1 - COALESCE(ft.discount_percentage, 0) / 100)) * 
+            CASE WHEN ft.price <= 50000 THEN 0.10 
+                 WHEN ft.price <= 100000 THEN 0.15 
+                 WHEN ft.price <= 300000 THEN 0.20 
+                 WHEN ft.price <= 500000 THEN 0.25 ELSE 0.30 END AS nett_profit,
+        CASE WHEN ft.price <= 50000 THEN 10 
+             WHEN ft.price <= 100000 THEN 15 
+             WHEN ft.price <= 300000 THEN 20 
+             WHEN ft.price <= 500000 THEN 25 ELSE 30 END AS persentase_gross_laba,
+        ft.rating AS rating_transaksi
+    FROM kimia_farma.kf_final_transaction ft
+    LEFT JOIN kimia_farma.kf_inventory inv 
+        ON ft.branch_id = inv.branch_id AND ft.product_id = inv.product_id
+),
+
+tabel_analisis AS (
+    SELECT 
+        tc.transaction_date, tc.transaction_id, kc.branch_id, COALESCE(kc.branch_name, 'Unknown') AS branch_name, 
+        kc.kota, kc.provinsi, COALESCE(kc.rating, 0) AS rating_cabang,
+        tc.customer_name, p.product_id, COALESCE(p.product_name, 'Unknown Product') AS product_name,
+        tc.actual_price, tc.discount_percentage, tc.nett_sales, tc.nett_profit,
+        tc.persentase_gross_laba, tc.rating_transaksi, COALESCE(tc.inventory_id, 'Unknown') AS inventory_id,    ---semua kolom dalam tabel
+        
+
+        -- Menghitung stok setelah transaksi dalam urutan yang benar
+        GREATEST(tc.stock_before_transaction -                      --Greatest digunakan untuk nilai negatif akan menjadi 0
+            SUM(1) OVER (PARTITION BY tc.inventory_id, tc.branch_id, tc.product_id 
+                         ORDER BY tc.transaction_date, tc.transaction_id 
+                         ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW), 0) 
+        AS stock_after_transaction
+    FROM transaction_cleaned tc
+    LEFT JOIN kimia_farma.kf_product p ON tc.product_id = p.product_id
+    LEFT JOIN kimia_farma.kf_kantor_cabang kc ON tc.branch_id = kc.branch_id
+    WHERE p.product_id IS NOT NULL AND kc.branch_id IS NOT NULL
+)
+
+SELECT * FROM tabel_analisis ORDER BY transaction_date, transaction_id;
